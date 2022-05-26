@@ -52,8 +52,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --train_bias
 ```
 
-To train and test the ![\operatorname{SPD}_6^{le}](https://latex.codecogs.com/svg.image?\operatorname{SPD}_6^{le}) model, 
-run the following command
+To train and test the GyroLE-KGCNet model, run the following command
 
 ```
 python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 train.py \\
@@ -72,8 +71,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --train_bias
 ```
 
-To train and test the ![\operatorname{Gr}_{20,10}](https://latex.codecogs.com/svg.image?\operatorname{Gr}_{20,10}) model, 
-run the following command
+To train and test the GyroGR-KGCNet model, run the following command
 
 ```
 python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 train.py \\
@@ -83,8 +81,8 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --results_file=out/results.csv \\
             --model=tggr \\
             --metric=riem \\
-            --dims=20 \\
-            --pdim=10 \\
+            --dims=5 \\
+            --pdim=2 \\
             --learning_rate=1e-3 \\
             --val_every=5 \\
             --patience=500 \\
@@ -93,7 +91,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --train_bias
 ```
 
-To train and test the ![\operatorname{SPD}_5^{le} \times \operatorname{Gr}_{5,2}](https://latex.codecogs.com/svg.image?\operatorname{SPD}_5^{le}&space;\times&space;\operatorname{Gr}_{5,2}) model, run the following command
+To train and test the GyroGRLE-KGCNet model, run the following command
 
 ```
 python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 train.py \\
