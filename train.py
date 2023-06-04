@@ -92,6 +92,8 @@ def get_model(args, saved_data=None):
         model = TgGRModel(args)
     elif args.model == "tgspdlegr":
         model = TgSPDLEGRModel(args)    
+    elif args.model == "tggyrogr":
+        model = TgGyroGRModel(args)
     else:
         raise ValueError(f"Unrecognized model argument: {args.model}")
 
