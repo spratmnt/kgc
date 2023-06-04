@@ -50,6 +50,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --val_every=5 \\
             --patience=500 \\
             --batch_size=4096 \\
+            --neg_sample_size=10 \\
             --epochs=5000 \\
             --train_bias
 ```
@@ -69,6 +70,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --val_every=5 \\
             --patience=500 \\
             --batch_size=4096 \\
+            --neg_sample_size=10 \\
             --epochs=5000 \\
             --train_bias
 ```
@@ -89,6 +91,7 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --val_every=5 \\
             --patience=500 \\
             --batch_size=4096 \\
+            --neg_sample_size=10 \\
             --epochs=5000 \\
             --train_bias
 ```
@@ -110,10 +113,29 @@ python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 tr
             --val_every=5 \\
             --patience=500 \\
             --batch_size=4096 \\
+            --neg_sample_size=10 \\
             --epochs=5000 \\
             --train_bias
 ```
 
+To train and test the GyroGr-KGC model, run the following command
+
+```
+python -m torch.distributed.launch --nproc_per_node=N_CPUS --master_port=2055 train.py \\
+            --n_procs=N_CPUS \\
+            --data=FB237 \\
+            --run_id=test \\
+            --results_file=out/results.csv \\
+            --model=tggyrogr \\
+            --metric=riem \\
+            --dims=24 \\
+            --pdim=12 \\                      
+            --val_every=5 \\            
+            --batch_size=4096 \\
+            --neg_sample_size=10 \\
+            --epochs=5000 \\
+            --train_bias
+```
 
 ### 4. Models and Metrics
 
@@ -124,6 +146,8 @@ The available options for the parameter `--model` are:
 * `tggr`: Applies a scaling on the head embedding. Embedding are p-dimensional subspaces of R^n. 
 
 * `tgspdlegr`: Applies a scaling on the head embedding with the mixture model. 
+
+* `tggyrogr`: Applies a translation on the head embedding. Embedding are p-dimensional subspaces of R^n.  
 
 In the current version, the only option for the parameter `--metric` is 
 
