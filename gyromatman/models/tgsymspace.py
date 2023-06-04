@@ -6,7 +6,7 @@ from gyromatman.utils import productory, trace, skew_partial, tril
 from gyromatman.manifolds import SPDLEManifold, GRManifold
 from gyromatman.manifolds.metrics import MetricType
 
-__all__ = ["TgSPDLEModel", "TgGRModel", "TgSPDLEGRModel"]
+__all__ = ["TgSPDLEModel", "TgGRModel", "TgSPDLEGRModel", "TgGyroGRModel"]
 
 class TgGRModel(KGModel):
     """Knowledge Graph embedding model that operates on the tangent space of the Grassmann Manifold"""
@@ -347,3 +347,175 @@ class TgSPDLEGRModel(KGModel):
 
     def relation_transform_norms(self):
         return self.rel_transforms_spd.detach().flatten(start_dim=1).norm(dim=-1)
+    
+    
+class TgGyroGRModel(KGModel):
+    """Knowledge Graph embedding isometry model that operates on the tangent space of the Grassmann Manifold"""
+
+    def __init__(self, args):
+        super().__init__(args)
+
+        self.dim_pp = args.pdim
+        self.dim_np = args.dims - args.pdim
+        self.dim_nn = self.dim_pp + self.dim_np
+
+        self.manifold = GRManifold(dims=args.dims, pdim=args.pdim, metric=MetricType.from_str(args.metric))
+
+        init_fn = lambda n_points: torch.randn((n_points, self.dim_pp, self.dim_np)) * INIT_EPS        
+        self.entities = torch.nn.Parameter(init_fn(args.num_entities), requires_grad=True)    # num_entities  x p x (n-p)
+        self.relations = torch.nn.Parameter(init_fn(args.num_relations), requires_grad=True)  # num_relations x p x (n-p)                
+
+        # extended version 
+        self.isom_init_nn = lambda n: torch.rand((n, self.dim_nn * (self.dim_nn - 1) // 2)) * 0.5 - 0.25  # U[-0.25, 0.25] radians ~ U[-15°, 15°]
+        self.rot_params_nn = torch.nn.Parameter(self.isom_init_nn(args.num_relations), requires_grad=True)
+        self.embed_index_nn = self.get_isometry_embed_index(self.dim_nn)        
+
+        self.addition = self.addition_hrh if args.use_hrh == 1 else self.addition_rhr
+        
+        self.map_tail = self.manifold.expmap_id
+    
+    def get_isometry_embed_index(self, dims):        
+        # indexes := 1 <= i < j < n. Using 1-based notation to make it equivalent to matrix math notation
+        indexes = [(i, j) for i in range(1, dims + 1) for j in range(i + 1, dims + 1)]
+
+        embed_index = []
+        for i, j in indexes:
+            row = []
+            for c_i, c_j in [(i, i), (i, j), (j, i), (j, j)]:  # 4 combinations that we care for each (i, j) pair
+                flatten_index = dims * (c_i - 1) + c_j - 1
+                row.append(flatten_index)
+            embed_index.append(row)
+        return torch.LongTensor(embed_index).unsqueeze(0).to(DEVICE)  # 1 x m x 4
+
+    def get_lhs(self, triples):
+        """
+        :param triples: b x 3: (head, relation, tail)
+        :return: b x n x n
+        """               
+        # extended version
+        isometry_params_nn = self.get_isometry_params(self.rot_params_nn)
+        all_relation_isometries = self.build_relation_isometry_matrices(isometry_params_nn, self.embed_index_nn, self.dim_nn)    # r x n x n
+        rel_isometries = all_relation_isometries[triples[:, 1]]                             # b x n x n
+
+        # method 1
+        tg_heads = skew_partial(self.entities[triples[:, 0]])
+        tg_heads = self.manifold.isometry_map(rel_isometries, tg_heads)
+        tg_relations = skew_partial(self.relations[triples[:, 1]])        
+
+        return self.addition(tg_heads, tg_relations)
+
+    def get_isometry_params(self, isom_params):
+        """
+        This method must be implemented by concrete clases where the isometry parameters
+        for each relation are computed  and returned as a tensor of r x m x 4 where
+            r: num of relations
+            m: num of isometries
+        :return: tensor of r x m x 4
+        """
+        return self.compute_reflection_params(isom_params)
+
+    def compute_reflection_params(self, params):
+        """
+        Computes rotation parameters:
+        For each entry in params computes:
+            R^+ = (cos(x), -sin(x), sin(x), cos(x))
+        :param params: r x m
+        :return: r x m x 4
+        """
+        cos_x = torch.cos(params)
+        sin_x = torch.sin(params)        
+        res = torch.stack([cos_x, sin_x, sin_x, -cos_x], dim=-1)
+        return res
+
+    def build_relation_isometry_matrices(self, isom_params, embed_index, dims):
+        """
+        Builds the rotation isometries as matrices for all available relations
+        :param isom_params: r x m x 4
+        :return: r x n x n
+        """
+        # isom_params = self.compute_rotation_params(self.rot_params)  # r x m x 4
+        embeded_rotations = self.embed_params(isom_params, embed_index, dims)  # r x m x n x n
+        isom_rot = productory(embeded_rotations)  # r x n x n
+        return isom_rot
+
+    def embed_params(self, iso_params: torch.Tensor, embed_index: torch.Tensor, dims: int) -> torch.Tensor:
+        """
+        Embeds the isometry params.
+        For each isometric operation there are m isometries with 4 params each.
+        This method embeds the 4 params into a dims x dims identity, in positions given by self.embed_index
+
+        :param iso_params: b x m x 4, where m = dims * (dims - 1) / 2, which is the amount of isometries
+        :param dims: (also called n) dimension of output identities, with params embedded
+        :return: b x m x n x n
+        """
+        bs, m, _ = iso_params.size()
+        target = torch.eye(dims, requires_grad=True, device=iso_params.device)
+        target = target.reshape(1, 1, dims * dims).repeat(bs, m, 1)  # b x m x n * n
+        scatter_index = embed_index.repeat(bs, 1, 1)  # b x m x 4
+        embed_isometries = target.scatter(dim=-1, index=scatter_index, src=iso_params)  # b x m x n * n
+        embed_isometries = embed_isometries.reshape(bs, m, dims, dims)  # b x m x n x n
+        return embed_isometries
+    
+    def addition_hrh(self, entities, relations):
+        """
+        :param entities: b x n x n: Points in TgSpaGrassmann  (Skew-symmetric matrices)
+        :param relations: b x n x n: Points in TgSpaGrassmann (Skew-symmetric matrices)
+        :return: rhs = t \oplus_id r: b x n x n
+        """        
+        # method 1
+        return self.manifold.addition_rot_and_skew(entities, relations)                   
+
+    def addition_rhr(self, entities, relations):
+        """
+        :param entities: b x n x n: Points in TgSpaGrassmann (Skew-symmetric matrices)
+        :param relations: b x n x n: Points in TgSpaGrassmann (Skew-symmetric matrices)
+        :return: rhs = t \oplus_id r: b x n x n
+        """
+        # inverts the order of the addition
+        return self.addition_hrh(relations, entities)
+
+    def get_rhs(self, triples):
+        """
+        :param triples: b x 3: (head, relation, tail)
+        :return: b x n
+        """
+        tg_tails = skew_partial(self.entities[triples[:, 2]])                  # b x n x n
+        return self.map_tail(tg_tails)
+
+    def similarity_score(self, lhs, rhs):
+        dist, _ = self.manifold.dist(lhs, rhs)
+        return -1 * dist ** 2, dist
+
+    def similarity_score_eval(self, lhs, rhs):
+        dist, _ = self.manifold.dist_eval(lhs, rhs)
+        return -1 * dist ** 2, dist
+
+    def get_factors(self, triples):
+        """
+        Returns factors for embeddings' regularization.
+        :param triples: b x 3: (head, relation, tail)
+        :return: list of 3 tensors of b x *
+        """
+        heads = self.entities[triples[:, 0]]
+        rel = self.relations[triples[:, 1]]        
+
+        # extended version
+        rot_params_nn = self.rot_params_nn[triples[:, 1]]
+
+        tails = self.entities[triples[:, 2]]        
+
+        # extended version
+        return heads, rel, rot_params_nn, tails
+
+    def compute_norms(self, points):
+        entities = self.manifold.expmap_id(lalg.sym(points.detach()))
+        return entities.flatten(start_dim=1).norm(dim=-1)
+
+    def entity_norms(self):
+        return self.compute_norms(self.entities)
+
+    def relation_norms(self):
+        return self.compute_norms(self.relations)
+
+    def relation_transform_norms(self):
+        return self.rel_transforms.detach().flatten(start_dim=1).norm(dim=-1)
